@@ -895,27 +895,29 @@ function setupBoardResizeObserver() {
     const gameLayout = document.querySelector('.game-layout');
     if (!gameLayout) return;
     
-    // Get available space
-    const layoutRect = gameLayout.getBoundingClientRect();
-    const sidebarWidth = sidebar ? sidebar.getBoundingClientRect().width : 340;
-    const gap = 20;
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
     
-    // On narrow screens (stacked layout), use full width minus padding
-    const isStacked = window.innerWidth <= 900;
+    // On narrow screens (stacked layout), board is above sidebar
+    const isStacked = viewportWidth <= 900;
+    const isShortScreen = viewportHeight <= 600;
+    
     let availableWidth, availableHeight;
     
     if (isStacked) {
-      availableWidth = layoutRect.width - 40;
-      availableHeight = window.innerHeight - 320; // Leave room for sidebar below
+      // Stacked: full width minus padding, height leaves room for controls
+      availableWidth = viewportWidth - 32;
+      availableHeight = isShortScreen ? viewportHeight - 100 : viewportHeight - 280;
     } else {
-      availableWidth = layoutRect.width - sidebarWidth - gap - 40;
-      availableHeight = layoutRect.height - 100; // Leave room for action bar
+      // Side-by-side: width minus sidebar, height minus action bar
+      const sidebarWidth = sidebar ? 340 : 0;
+      availableWidth = viewportWidth - sidebarWidth - 60;
+      availableHeight = isShortScreen ? viewportHeight - 120 : viewportHeight - 200;
     }
     
-    // Board is a perfect square: min(width, height)
-    const boardSize = Math.max(280, Math.min(750, Math.min(availableWidth, availableHeight)));
+    // Board is a perfect square: use the smaller dimension, capped at 750
+    const boardSize = Math.max(200, Math.min(750, Math.min(availableWidth, availableHeight)));
     
-    boardFrame.style.setProperty('--board-size', `${boardSize}px`);
     boardFrame.style.width = `${boardSize}px`;
     boardFrame.style.height = `${boardSize}px`;
     
