@@ -120,8 +120,11 @@ function saveSettings() {
 
 // ── PROCEDURAL WEB AUDIO SYNTH ENGINE ──
 let audioCtx = null;
+
 let bgmSourceNode = null;
 let bgmGainNode = null;
+let currentBGMScene = null;
+let bgmFadeTimeout = null;
 
 function initAudio() {
   if (audioCtx) return;
@@ -495,82 +498,190 @@ function playSFX(type, param = null) {
   }
 }
 
-function startBGM() {
-  if (!audioCtx) return;
-  try {
-    if (bgmSourceNode) {
-      bgmSourceNode.stop();
-      bgmSourceNode = null;
-    }
-    
+
+// --- Procedural 8-bit BGM Track Generators ---
+const BGM_TRACKS = {
+  menu: function playMenuTrack(gainNode) {
+    // Upbeat, catchy 8-bit title screen
+    return proceduralChiptuneLoop({
+      bpm: 140,
+      lead: ["C5","E5","G5","C6","B5","G5","E5","C5"],
+      bass: ["C3","C3","G2","G2","A2","A2","F2","F2"],
+      percussion: true,
+      gainNode,
+      mood: "upbeat"
+    });
+  },
+  lobby: function playLobbyTrack(gainNode) {
+    // Light, playful 8-bit lobby
+    return proceduralChiptuneLoop({
+      bpm: 110,
+      lead: ["E4","G4","B4","G4","A4","F4","D4","F4"],
+      bass: ["C2","G2","A2","F2"],
+      percussion: true,
+      gainNode,
+      mood: "playful"
+    });
+  },
+  game: function playGameTrack(gainNode) {
+    // Driving, bassy, competitive 8-bit gameplay
+    return proceduralChiptuneLoop({
+      bpm: 160,
+      lead: ["C5","D#5","G5","A#5","G5","D#5","C5","A#4"],
+      bass: ["C2","C2","G1","G1","A1","A1","F1","F1"],
+      percussion: true,
+      gainNode,
+      mood: "intense"
+    });
+  }
+};
+
+// --- Music Manager ---
+function playBGMForScene(scene) {
+  if (!audioCtx || !settings.bgmEnabled) return;
+  if (currentBGMScene === scene) return; // Already playing
+  fadeOutBGM(() => {
+    stopBGM();
     bgmGainNode = audioCtx.createGain();
     bgmGainNode.gain.setValueAtTime((settings.volBGM / 100) * 0.06, audioCtx.currentTime);
     bgmGainNode.connect(audioCtx.destination);
-    
-    // Create an oscillator arpeggiator synthesizer loop for loop BGM!
-    const tempo = 120; // 120 bpm
-    const beatSec = 60 / tempo;
-    
-    // Notes: Am - F - C - G progression
-    const chords = [
-      [220, 261.63, 329.63, 440], // Am
-      [174.61, 220, 261.63, 349.23], // F
-      [261.63, 329.63, 392.00, 523.25], // C
-      [196.00, 246.94, 293.66, 392.00]  // G
-    ];
-    
-    let chordIdx = 0;
-    
-    const playNextBeat = () => {
-      if (!bgmGainNode || !settings.bgmEnabled) return;
-      const t = audioCtx.currentTime;
-      const chord = chords[chordIdx % chords.length];
-      
-      // Play 4 notes in a beautiful ascending/descending arpeggio per chord
-      for (let i = 0; i < 4; i++) {
-        const noteTime = t + (i * (beatSec / 2));
-        const freq = chord[i];
-        const osc = audioCtx.createOscillator();
-        const chordGain = audioCtx.createGain();
-        
-        osc.connect(chordGain);
-        chordGain.connect(bgmGainNode);
-        
-        osc.type = "sine";
-        osc.frequency.setValueAtTime(freq, noteTime);
-        
-        chordGain.gain.setValueAtTime(0, noteTime);
-        chordGain.gain.linearRampToValueAtTime((settings.volBGM / 100) * 0.08, noteTime + 0.02);
-        chordGain.gain.exponentialRampToValueAtTime(0.001, noteTime + beatSec);
-        
-        osc.start(noteTime);
-        osc.stop(noteTime + beatSec + 0.05);
-      }
-      
-      chordIdx++;
-      
-      // Schedule the next chord in beatSec * 2 seconds (half notes)
-      const nextCallMs = beatSec * 2 * 1000;
-      bgmSourceNode = setTimeout(playNextBeat, nextCallMs);
-    };
-    
-    playNextBeat();
-    
-  } catch (e) {
-    console.error("Looping arpeggiator synthesizer failed:", e);
+    if (BGM_TRACKS[scene]) {
+      bgmSourceNode = BGM_TRACKS[scene](bgmGainNode);
+      currentBGMScene = scene;
+    }
+  });
+}
+
+function fadeOutBGM(onFadeComplete) {
+  if (bgmGainNode) {
+    bgmGainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.5);
+    if (bgmFadeTimeout) clearTimeout(bgmFadeTimeout);
+    bgmFadeTimeout = setTimeout(() => {
+      if (onFadeComplete) onFadeComplete();
+    }, 520);
+  } else if (onFadeComplete) {
+    onFadeComplete();
   }
 }
 
-function stopBGM() {
-  if (bgmSourceNode) {
-    clearTimeout(bgmSourceNode);
-    bgmSourceNode = null;
+function proceduralChiptuneLoop({bpm, lead, bass, percussion, gainNode, mood}) {
+  // Compose a simple chiptune loop with lead, bass, percussion
+  let stopped = false;
+  let t0 = audioCtx.currentTime;
+  const beatSec = 60 / bpm;
+  let step = 0;
+  function playLoop() {
+    if (stopped || !settings.bgmEnabled) return;
+    const now = audioCtx.currentTime;
+    // Lead
+    const leadNote = noteToFreq(lead[step % lead.length]);
+    const leadOsc = audioCtx.createOscillator();
+    const leadGain = audioCtx.createGain();
+    leadOsc.type = "square";
+    leadOsc.frequency.setValueAtTime(leadNote, now);
+    leadGain.gain.setValueAtTime(0.13, now);
+    leadGain.gain.linearRampToValueAtTime(0.01, now + beatSec*0.8);
+    leadOsc.connect(leadGain);
+    leadGain.connect(gainNode);
+    leadOsc.start(now);
+    leadOsc.stop(now + beatSec);
+    // Bass
+    const bassNote = noteToFreq(bass[step % bass.length]);
+    const bassOsc = audioCtx.createOscillator();
+    const bassGain = audioCtx.createGain();
+    bassOsc.type = (mood === "intense") ? "sawtooth" : "triangle";
+    bassOsc.frequency.setValueAtTime(bassNote, now);
+    bassGain.gain.setValueAtTime(mood === "intense" ? 0.22 : 0.12, now);
+    bassGain.gain.linearRampToValueAtTime(0.01, now + beatSec*0.9);
+    // Add distortion for gameplay
+    let finalBass = bassGain;
+    if (mood === "intense") {
+      const shaper = audioCtx.createWaveShaper();
+      shaper.curve = new Float32Array([0,1,0,-1,0,1,0,-1,0]);
+      shaper.oversample = '4x';
+      bassGain.connect(shaper);
+      shaper.connect(gainNode);
+      finalBass = shaper;
+    } else {
+      bassGain.connect(gainNode);
+    }
+    bassOsc.connect(bassGain);
+    bassOsc.start(now);
+    bassOsc.stop(now + beatSec);
+    // Percussion
+    if (percussion) {
+      // Kick
+      const kick = audioCtx.createOscillator();
+      const kickGain = audioCtx.createGain();
+      kick.type = "sine";
+      kick.frequency.setValueAtTime(120, now);
+      kick.frequency.exponentialRampToValueAtTime(40, now + 0.09);
+      kickGain.gain.setValueAtTime(0.18, now);
+      kickGain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+      kick.connect(kickGain);
+      kickGain.connect(gainNode);
+      kick.start(now);
+      kick.stop(now + 0.1);
+      // Snare
+      const snare = audioCtx.createBufferSource();
+      const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.08, audioCtx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+      snare.buffer = buffer;
+      const snareGain = audioCtx.createGain();
+      snareGain.gain.setValueAtTime(0.09, now + beatSec*0.5);
+      snareGain.gain.linearRampToValueAtTime(0.001, now + beatSec*0.5 + 0.08);
+      snare.connect(snareGain);
+      snareGain.connect(gainNode);
+      snare.start(now + beatSec*0.5);
+      // Hi-hat
+      const hat = audioCtx.createBufferSource();
+      const hatBuffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.03, audioCtx.sampleRate);
+      const hatData = hatBuffer.getChannelData(0);
+      for (let i = 0; i < hatData.length; i++) hatData[i] = Math.random() * 2 - 1;
+      hat.buffer = hatBuffer;
+      const hatGain = audioCtx.createGain();
+      hatGain.gain.setValueAtTime(0.05, now + beatSec*0.75);
+      hatGain.gain.linearRampToValueAtTime(0.001, now + beatSec*0.75 + 0.03);
+      hat.connect(hatGain);
+      hatGain.connect(gainNode);
+      hat.start(now + beatSec*0.75);
+    }
+    // Schedule next step
+    bgmSourceNode = setTimeout(playLoop, beatSec * 1000);
+    step++;
   }
+  playLoop();
+  // Return a stop function
+  return {
+    stop: () => { stopped = true; if (bgmSourceNode) clearTimeout(bgmSourceNode); },
+  };
+}
+
+function noteToFreq(note) {
+  // e.g. "C4" to frequency
+  const notes = {C:0, 'C#':1, D:2, 'D#':3, E:4, F:5, 'F#':6, G:7, 'G#':8, A:9, 'A#':10, B:11};
+  const match = note.match(/^([A-G]#?)(\d)$/);
+  if (!match) return 440;
+  const [, n, oct] = match;
+  return 440 * Math.pow(2, (notes[n] + (oct-4)*12 - 9)/12);
+}
+
+
+function stopBGM() {
+  if (bgmSourceNode && typeof bgmSourceNode.stop === 'function') {
+    bgmSourceNode.stop();
+  } else if (bgmSourceNode) {
+    clearTimeout(bgmSourceNode);
+  }
+  bgmSourceNode = null;
   if (bgmGainNode) {
     bgmGainNode.disconnect();
     bgmGainNode = null;
   }
+  currentBGMScene = null;
 }
+
 
 function updateBGMVolume() {
   if (bgmGainNode) {
@@ -610,9 +721,17 @@ const api = async (path, body) => {
 function showScreen(screenId) {
   document.querySelectorAll(".screen").forEach(s => s.classList.add("hidden"));
   $(`screen-${screenId}`).classList.remove("hidden");
-  
+
+  // Music scene switching
   if (screenId === "menu") {
+    playBGMForScene("menu");
     $("main-menu-bg").classList.remove("hidden");
+  } else if (screenId === "lobby") {
+    playBGMForScene("lobby");
+    $("main-menu-bg").classList.add("hidden");
+  } else if (screenId === "game") {
+    playBGMForScene("game");
+    $("main-menu-bg").classList.add("hidden");
   } else {
     $("main-menu-bg").classList.add("hidden");
   }
@@ -2001,43 +2120,83 @@ function renderGameScreen() {
 }
 
 // Emote click triggers
+
+// Find the local human player (assume first non-AI is the user)
+function getLocalHumanPlayer() {
+  return gameSession.players.find(p => !p.is_ai);
+}
+
 document.querySelectorAll(".btn-emote").forEach(btn => {
   btn.addEventListener("click", () => {
     const type = btn.getAttribute("data-emote");
-    const activePlayer = gameSession.players[gameSession.current_turn];
-    if (activePlayer.is_ai) return; // Only humans click
-    
-    executeEmote(activePlayer.id, type);
+    const localPlayer = getLocalHumanPlayer();
+    if (!localPlayer) return;
+    executeEmote(localPlayer.id, type);
   });
 });
+
+
+// Store active emote bubbles by playerId
+const activeEmoteBubbles = {};
 
 function executeEmote(playerId, type) {
   playSFX("emote", type);
   const player = gameSession.players.find(p => p.id === playerId);
   if (!player || player.position < 1) return;
 
-  const center = tileCenter(player.position);
-  
-  // Create bubble element over token coordinates on screen
+  // Remove any existing emote bubble for this player
+  if (activeEmoteBubbles[playerId]) {
+    activeEmoteBubbles[playerId].remove();
+    delete activeEmoteBubbles[playerId];
+  }
+
+  // Create bubble element
   const container = $("canvas-overlay-container");
   const bubble = document.createElement("div");
   bubble.className = "emote-bubble";
-  
-  // Translate center to canvas viewport CSS percentages
-  const canvasSz = canvas ? canvas.width : 750;
-  const leftPct = (center.x / canvasSz) * 100;
-  const topPct = (center.y / canvasSz) * 100;
-  
-  bubble.style.left = `${leftPct}%`;
-  bubble.style.top = `${topPct}%`;
   bubble.innerHTML = `<span>${EMOTE_EMOJIS[type]}</span>`;
-  
   container.appendChild(bubble);
+  activeEmoteBubbles[playerId] = bubble;
 
-  // Auto remove after animation completes
-  setTimeout(() => {
-    bubble.remove();
-  }, 2200);
+  // Animation timing
+  const EMOTE_DURATION = 2200;
+  const startTime = performance.now();
+
+  // Animation frame updater
+  function updateBubble() {
+    // If player is still present and bubble exists
+    const p = gameSession.players.find(p => p.id === playerId);
+    if (!p || !bubble.parentNode) return;
+
+    // Use animatingCoords if present, else tileCenter
+    let center;
+    if (p.animatingCoords) {
+      center = p.animatingCoords;
+    } else {
+      center = tileCenter(p.position);
+    }
+    const canvasSz = canvas ? canvas.width : 750;
+    const leftPct = (center.x / canvasSz) * 100;
+    const topPct = (center.y / canvasSz) * 100;
+    bubble.style.left = `${leftPct}%`;
+    bubble.style.top = `${topPct}%`;
+
+    // Continue updating until duration expires
+    if (performance.now() - startTime < EMOTE_DURATION) {
+      requestAnimationFrame(updateBubble);
+    } else {
+      // Fade out and remove
+      bubble.style.transition = "opacity 0.4s";
+      bubble.style.opacity = 0;
+      setTimeout(() => {
+        bubble.remove();
+        if (activeEmoteBubbles[playerId] === bubble) {
+          delete activeEmoteBubbles[playerId];
+        }
+      }, 400);
+    }
+  }
+  updateBubble();
 
   appendLog(`💬 [Emote] ${player.name} reacts: ${type.toUpperCase()}!`);
 }
