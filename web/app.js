@@ -55,6 +55,7 @@ let floatingNumbers = [];
 let comboPopups = [];
 let boardShakeOffset = { x: 0, y: 0 };
 let currentHoveredTile = null;
+let boardResizeObserver = null;
 
 // ── Chess-style snake placement state ──
 let placement = { active: false, head: null, validHeads: new Set(), validTails: new Set() };
@@ -656,8 +657,8 @@ function renderLobbySlots() {
       <div class="slot-type">
         <select id="slot-type-${i}" class="lobby-select w-100">
           <option value="human" ${defaultType === 'human' ? 'selected' : ''}>👤 Human</option>
-          <option value="easy" ${defaultType === 'easy' ? 'selected' : ''}>🤖 Easy AI</option>
-          <option value="hard" ${defaultType === 'hard' ? 'selected' : ''}>🔥 Hard AI</option>
+        <option value="easy" ${defaultType === 'easy' ? 'selected' : ''}>Easy AI</option>
+        <option value="hard" ${defaultType === 'hard' ? 'selected' : ''}>Hard AI</option>
         </select>
       </div>
       <div class="slot-color">
@@ -854,7 +855,7 @@ $("btn-lobby-start").addEventListener("click", async () => {
     
     // Clear logs
     $("battle-log-lines").innerHTML = "";
-    appendLog(`🎲 Game started! Seed = ${gameSession.seed}`);
+    appendLog(`Game started! Seed = ${gameSession.seed}`);
     appendLog(`Seat shuffle turn order: ${gameSession.players.map(p => p.name).join(" ➔ ")}`);
 
     particles = [];
@@ -864,6 +865,7 @@ $("btn-lobby-start").addEventListener("click", async () => {
     animationQueue = [];
     
     renderGameScreen();
+    setupBoardResizeObserver();
     startDrawLoop();
     
     // If first player is an AI, trigger AI loop
@@ -877,6 +879,62 @@ $("btn-lobby-start").addEventListener("click", async () => {
 
 // ── CANVAS DRAW ENGINE (HIGH FIDELITY) ──
 let requestDrawId = null;
+
+// ── RESPONSIVE BOARD SIZING ──
+// Board size = min(available width, available height) so it's always a perfect square
+function setupBoardResizeObserver() {
+  if (boardResizeObserver) boardResizeObserver.disconnect();
+  
+  const boardContainer = document.querySelector('.board-container');
+  const boardFrame = document.querySelector('.board-frame');
+  const sidebar = document.querySelector('.sidebar-panel');
+  
+  if (!boardContainer || !boardFrame) return;
+  
+  const recalcBoardSize = () => {
+    const gameLayout = document.querySelector('.game-layout');
+    if (!gameLayout) return;
+    
+    // Get available space
+    const layoutRect = gameLayout.getBoundingClientRect();
+    const sidebarWidth = sidebar ? sidebar.getBoundingClientRect().width : 340;
+    const gap = 20;
+    
+    // On narrow screens (stacked layout), use full width minus padding
+    const isStacked = window.innerWidth <= 900;
+    let availableWidth, availableHeight;
+    
+    if (isStacked) {
+      availableWidth = layoutRect.width - 40;
+      availableHeight = window.innerHeight - 320; // Leave room for sidebar below
+    } else {
+      availableWidth = layoutRect.width - sidebarWidth - gap - 40;
+      availableHeight = layoutRect.height - 100; // Leave room for action bar
+    }
+    
+    // Board is a perfect square: min(width, height)
+    const boardSize = Math.max(280, Math.min(750, Math.min(availableWidth, availableHeight)));
+    
+    boardFrame.style.setProperty('--board-size', `${boardSize}px`);
+    boardFrame.style.width = `${boardSize}px`;
+    boardFrame.style.height = `${boardSize}px`;
+    
+    // Update canvas internal resolution to match
+    if (canvas) {
+      canvas.width = boardSize;
+      canvas.height = boardSize;
+    }
+  };
+  
+  boardResizeObserver = new ResizeObserver(recalcBoardSize);
+  boardResizeObserver.observe(document.body);
+  
+  // Also recalc on window resize
+  window.addEventListener('resize', recalcBoardSize);
+  
+  // Initial calculation
+  recalcBoardSize();
+}
 
 function startDrawLoop() {
   if (requestDrawId) cancelAnimationFrame(requestDrawId);
@@ -903,14 +961,16 @@ function tileToGridCoords(tile) {
 // Center point of a tile index on canvas
 function tileCenter(tile) {
   const { col, row } = tileToGridCoords(tile);
-  const size = 750 / 10;
+  const canvasSize = canvas ? canvas.width : 750;
+  const size = canvasSize / 10;
   const x = col * size + size / 2;
   const y = (9 - row) * size + size / 2;
   return { x, y };
 }
 
 function drawBoard() {
-  const size = 750 / 10;
+  const canvasSize = canvas ? canvas.width : 750;
+  const size = canvasSize / 10;
   ctx.save();
   
   // Camera Rumble screen shake
@@ -918,7 +978,7 @@ function drawBoard() {
   
   // Clear background
   ctx.fillStyle = "#0c0c16";
-  ctx.fillRect(0, 0, 750, 750);
+  ctx.fillRect(0, 0, canvasSize, canvasSize);
 
   // 1. Draw Checkerboard Squares with wood textured borders
   for (let r = 0; r < 10; r++) {
@@ -964,7 +1024,7 @@ function drawBoard() {
   // Chess-style placement glow: dim board + glow candidate tiles.
   if (placement.active) {
     ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
-    ctx.fillRect(0, 0, 750, 750);
+    ctx.fillRect(0, 0, canvasSize, canvasSize);
 
     const pulse = 0.5 + 0.5 * Math.sin(Date.now() * 0.006);
     const glowTiles = placement.head === null ? placement.validHeads : placement.validTails;
@@ -1877,8 +1937,8 @@ function renderGameScreen() {
   $("turn-pname").style.color = NEON_COLORS[activePlayer.id];
   
   const desc = activePlayer.is_ai 
-    ? `🤖 ${activePlayer.difficulty.toUpperCase()} AI thinking...` 
-    : "👤 YOUR TURN — Make moves!";
+    ? `${activePlayer.difficulty.toUpperCase()} AI thinking...` 
+    : "YOUR TURN — Make moves!";
   $("turn-pdesc").textContent = desc;
 
   // Active status ring highlight around timers
@@ -1894,7 +1954,7 @@ function renderGameScreen() {
   if (canShop) {
     $("shop-panel").classList.remove("hidden");
     $("btn-shop-place").textContent = placement.active
-      ? "✖️ Cancel placement" : "🎯 Place a Snake";
+      ? "Cancel placement" : "Place a Snake";
     if (!placement.active) setShopInstruction("");
   } else {
     $("shop-panel").classList.add("hidden");
@@ -1928,7 +1988,7 @@ function renderGameScreen() {
         </div>
         <div class="pcard-score">
           <div class="pcard-points">${p.points} <span style="font-size: 0.75rem; color: #a0a0a0">pts</span></div>
-          <div class="pcard-snakes">🐍 ${p.snake_count}/3 owned</div>
+          <div class="pcard-snakes">${p.snake_count}/3 snakes</div>
         </div>
       </div>
     `;
@@ -1962,8 +2022,9 @@ function executeEmote(playerId, type) {
   bubble.className = "emote-bubble";
   
   // Translate center to canvas viewport CSS percentages
-  const leftPct = (center.x / 750) * 100;
-  const topPct = (center.y / 750) * 100;
+  const canvasSz = canvas ? canvas.width : 750;
+  const leftPct = (center.x / canvasSz) * 100;
+  const topPct = (center.y / canvasSz) * 100;
   
   bubble.style.left = `${leftPct}%`;
   bubble.style.top = `${topPct}%`;
@@ -2029,7 +2090,7 @@ async function enterPlacement() {
   }
   placement.active = true;
   setShopInstruction("Click a glowing HEAD tile (where the snake bites).");
-  $("btn-shop-place").textContent = "✖️ Cancel placement";
+  $("btn-shop-place").textContent = "Cancel placement";
   playSFX("click");
 }
 
@@ -2041,7 +2102,7 @@ function cancelPlacement() {
   previewSnake = null;
   setShopInstruction("");
   const b = $("btn-shop-place");
-  if (b) b.textContent = "🎯 Place a Snake";
+  if (b) b.textContent = "Place a Snake";
 }
 
 function handleBoardClick(tile) {
@@ -2107,7 +2168,7 @@ async function commitSnakePurchase() {
   if (!res.ok) { $("shop-feedback").textContent = `❌ ${res.message}`; cancelPlacement(); return; }
 
   playSFX("shop_buy");
-  appendLog(`🛒 [Shop] ${p.name} placed snake ${head}➔${tail}.`);
+  appendLog(`[Shop] ${p.name} placed snake ${head}➔${tail}.`);
   if (gameSession.stats[p.id]) gameSession.stats[p.id].snakesPlaced++;
 
   cancelPlacement();
@@ -2371,27 +2432,27 @@ function handleVictory(winner) {
   const stats = gameSession.stats[winner.id];
   $("victory-stats-grid").innerHTML = `
     <div class="vstat-card">
-      <div class="vstat-label">🐍 Snakes Placed</div>
+      <div class="vstat-label">Snakes Placed</div>
       <div class="vstat-val">${stats.snakesPlaced}</div>
     </div>
     <div class="vstat-card">
-      <div class="vstat-label">🦷 Bitten Count</div>
+      <div class="vstat-label">Bitten Count</div>
       <div class="vstat-val">${stats.bittenCount}</div>
     </div>
     <div class="vstat-card">
-      <div class="vstat-label">☠️ Bankrupt resets</div>
+      <div class="vstat-label">Bankrupt Resets</div>
       <div class="vstat-val">${stats.bankruptCount}</div>
     </div>
     <div class="vstat-card">
-      <div class="vstat-label">🪜 Ladders Climbed</div>
+      <div class="vstat-label">Ladders Climbed</div>
       <div class="vstat-val">${stats.laddersClimbed}</div>
     </div>
     <div class="vstat-card">
-      <div class="vstat-label">💣 Bombs Exploded</div>
+      <div class="vstat-label">Bombs Exploded</div>
       <div class="vstat-val">${stats.bombsHit}</div>
     </div>
     <div class="vstat-card">
-      <div class="vstat-label">📈 Turns Taken</div>
+      <div class="vstat-label">Turns Taken</div>
       <div class="vstat-val">${stats.turnsTaken}</div>
     </div>
   `;
